@@ -1,12 +1,20 @@
 #!/usr/bin/python
 
-# last edit abigailc@Actaeon on october 19 2016
+# adapted from version written by abigailc@Actaeon on october 19 2016
+# Note!!!!!
+#   There is a problem with scp-ing from the cluster within this script
+#   It copies a blank file 
+#   The file is actually copied in the make_dataset script
+#   Unsure why it is copying a blank file, but the work-around is to just scp the file outside of the script
+#   Sorry!
+# by Elise Cutts
 
-#this script will take an alignment, send it to muscle align and raxml on the cluster, and then bring it home.
+#this script will take a fasta file, send it to mafft to align on the cluster, and then bring it home.
 
 #set these yourself
 ssh_inst = "ssh ecutts@eofe7.mit.edu"
 clus_head = "ecutts@eofe7.mit.edu:/home/ecutts/"
+
 #imports
 import sys
 import argparse
@@ -18,46 +26,43 @@ import time
 def check_directory_existance(ssh_inst):
     import os
     print("checking dirs")
-    os.system(ssh_inst+" \'mkdir MusRax\'")
+    os.system(ssh_inst+" \'mkdir MAFFT\'")
 
 #removes extra files
 def remove_slurm_files(ssh_inst,pattern):
     print("removing")
-    os.system(ssh_inst+" \'cd MusRax; rm "+pattern+"\'")
+    os.system(ssh_inst+" \'cd MAFFT; rm "+pattern+"\'")
 
 #does everything
-def musrax_on_cluster(filename, scriptname):
+def mafft_on_cluster(filename, scriptname, runtype):
     print("starting")
-    #define muscle-out, rax-out names
-    outname = filename+"_Muscle.fasta"
-    raxl = outname.split(".")
-    raxn = raxl[0]
-    raxoutname = "RAxML_bipartitions."+raxn
+    #define mafft-out name
+    outname = filename.split('.')[0] +"_MAFFT.aln"
     #make dir on cluster if need be
     check_directory_existance(ssh_inst)
     #artefact
-    clus_path = "/MusRax"
+    clus_path = "/MAFFT"
     #make the script
-    a = gen_musrax_script(scriptname, filename, outname, raxn)
+    a = gen_script(scriptname, filename, outname, runtype)
     #a = name of script
     #current dir
     direct = os.getcwd()
 
-    #os.system("scp "+clus_head[:-1]+clus_path+"/"+outname+" "+direct)
+    os.system("scp "+clus_head[:-1]+clus_path+"/"+outname+" "+direct)
     #move files to cluster
     move_to_cluster([filename,a], clus_path)
     #submit the .sh file on the cluster
 
-    os.system(ssh_inst+" 'cd ~/MusRax/;echo $PWD;sbatch "+a+"'")
+    os.system(ssh_inst+" 'cd ~/MAFFT/;echo $PWD;sbatch "+a+"'")
     finished = "start"
-    #to see if the run is complete, see if each new file has been generated. check every 5 minutes for raxml output file name
+    #to see if the run is complete, see if each new file has been generated. check every 5 minutes for MAFFT output file name
     os.system("sleep 60")
     while finished is not True:
         #try and copy it home
-        os.system("scp "+clus_head[:-1]+clus_path+"/"+raxoutname+" "+direct)
-        
+        print('trying ' + "scp "+clus_head[:-1]+clus_path+"/"+outname+" "+direct)
+        os.system("scp -v "+clus_head[:-1]+clus_path+"/"+outname+" "+direct)
         #see if it exists at home
-        exists = os.path.isfile(raxoutname)
+        exists = os.path.isfile(outname)
         if exists is True:
             finished = "yes"
         #if not, wait and try again
@@ -69,28 +74,22 @@ def musrax_on_cluster(filename, scriptname):
             print("Should be done!")
             finished = True
     print("Your file should exist")
-    return raxoutname
+    return outname
 
+#this creates a single-use script to run muscle
+def gen_script(scriptfile, inputfile, outputfile, runtype):
 
-#this creates a single-use script to run muscle and raxml (gammaLG + 100 rapid bootstraps + consensus tree)
-def gen_musrax_script(scriptfile, inputfile, outputfile, raxn):
-
-
-##example script
+## script template
     a =  """#!/bin/bash                                                                                          
 #SBATCH -p sched_mit_g4nier                                                                          
 #SBATCH -t 7-00:00:00   
 #SBATCH --nodes=1
-#SBATCH --cpus-per-task=20
-#SBATCH -J RAX"""+scriptfile+"""   
-#SBATCH -o RAX"""+scriptfile+""".out                                                                                         
+#SBATCH -J """+scriptfile+"""   
+#SBATCH -o """+scriptfile+""".out                                                                                         
 
 . /etc/profile.d/modules.sh
-module add engaging/RAxML/8.2.9
-module add engaging/muscle/3.8.31
-muscle -in """+inputfile+""" -out """+outputfile+"""
-raxmlHPC-PTHREADS-AVX -T 20 -f a -m PROTGAMMALG -p 12345 -x 12345 -#100 -n """+raxn+""" -s """+outputfile+"""        
-
+module add engaging/mafft/7.245-with-extensions
+"""+runtype+""" """+inputfile+""" > """+outputfile+"""
 exit"""
     
     with open(scriptfile+".sh", "w") as script:
@@ -116,19 +115,28 @@ if __name__ == "__main__":
     import os
     import re
     import time
+    from src import config
     parser = argparse.ArgumentParser(description="All")
-    parser.add_argument("directory", nargs='?', default=os.getcwd(), type=str, help="type name of directory to run in (where .nex resides)")
+   # parser.add_argument("directory", nargs='?', default=os.getcwd(), type=str, help="type name of directory to run in (where .nex resides)")
+    parser.add_argument("input_directory", nargs='?', default=config.data, type=str, help="name of directory with raw data")
+    parser.add_argument("output_directory", nargs='?', default=config.data, type=str, help="name of directory with processed data")
     parser.add_argument("-s", "--script", action = "store", default = False, help="give a name for your script/jop")
     parser.add_argument("-f", "--fasta", action = "store", default = False, help="give a .fasta file")
+    parser.add_argument("--type", action='store', default='mafft', help='ginsi, linsi, or ensi, default mafft (auto)')
 
 
+    
     
     args = parser.parse_args()
     #change dir if given
     try:
-        os.chdir(args.directory)
+        os.chdir(args.input_directory)
     except:
         print ("didn't change dir")
     #run the thing
-    musrax_on_cluster(args.fasta, args.script)
+
+    outname = mafft_on_cluster(args.fasta, args.script, args.type)
+
+    os.system("mv " + outname +  " " + args.output_directory)
+    os.system("mv " + args.script + '.sh ' + args.output_directory)
     print("done")
